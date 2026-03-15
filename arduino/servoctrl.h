@@ -13,6 +13,7 @@
 
 // configuration
 // SERVOCTRL is fixed to Pin PB1
+#define SERVOCTRL_PINB_DIR_MASK (1 << DDB1)
 #define SERVOCTRL_INVERTSIGNAL 0
 #define SERVOCTRL_PWMPERIOD_S 0.02
 #define SERVOCTRL_ISR_PRESCALER 256
@@ -43,6 +44,7 @@ class ServoCtrl
 {
 public:
   static void init();
+  static void deactivate();
   static bool lower();
   static bool lift();
   static bool is_down();
@@ -62,7 +64,7 @@ typedef enum
 /// @brief state variable for the servo control state machine, should be modified only within the ISR and the ServoCtrl methods
 volatile servoctrl_state_t servoctrl_state{SERVOCTRL_OFF};
 /// @brief servo pwm value, should be modified only within the ISR
-volatile int16_t servoctrl_pwm{SERVOCTRL_ISR_TICKS_UP};
+volatile int16_t servoctrl_pulsewidth{SERVOCTRL_ISR_TICKS_UP};
 
 /// @brief interrupt service routine for Timer1 Compare Match A, used to ramp the pulse width up and down for smooth lifting and lowering of the pen
 ISR(TIMER1_COMPA_vect)
@@ -70,24 +72,24 @@ ISR(TIMER1_COMPA_vect)
   if (servoctrl_state == SERVOCTRL_LOWERING)
   {
     // ramp the pulse width in steps until the ramped down pulse width is reached
-    servoctrl_pwm += SERVOCTRL_ISR_RAMP_LOWER;
-    if (SERVOCTRL_ISR_RAMPEDDOWN(servoctrl_pwm))
+    servoctrl_pulsewidth += SERVOCTRL_ISR_RAMP_LOWER;
+    if (SERVOCTRL_ISR_RAMPEDDOWN(servoctrl_pulsewidth))
     {
       servoctrl_state = SERVOCTRL_DOWN;
-      servoctrl_pwm = SERVOCTRL_ISR_TICKS_DOWN;
+      servoctrl_pulsewidth = SERVOCTRL_ISR_TICKS_DOWN;
     }
-    OCR1A = static_cast<uint16_t>(servoctrl_pwm);
+    OCR1A = static_cast<uint16_t>(servoctrl_pulsewidth);
   }
   else if (servoctrl_state == SERVOCTRL_LIFTING)
   {
     // ramp the pulse width in steps until the ramped up pulse width is reached
-    servoctrl_pwm += SERVOCTRL_ISR_RAMP_LIFT;
-    if (SERVOCTRL_ISR_RAMPEDUP(servoctrl_pwm))
+    servoctrl_pulsewidth += SERVOCTRL_ISR_RAMP_LIFT;
+    if (SERVOCTRL_ISR_RAMPEDUP(servoctrl_pulsewidth))
     {
       servoctrl_state = SERVOCTRL_UP;
-      servoctrl_pwm = SERVOCTRL_ISR_TICKS_UP;
+      servoctrl_pulsewidth = SERVOCTRL_ISR_TICKS_UP;
     }
-    OCR1A = static_cast<uint16_t>(servoctrl_pwm);
+    OCR1A = static_cast<uint16_t>(servoctrl_pulsewidth);
   }
 }
 
@@ -99,25 +101,32 @@ void ServoCtrl::init()
   // ICR1 = 62500/50 - 1 = 1249 (20ms period)
   // COM1A1=1, COM1A0=0: clear OC1A on compare match, set at BOTTOM (active high pulse)
   // COM1A1=1, COM1A0=1: set OC1A on compare match, clear at BOTTOM (active low pulse)
+  // enable TIMER1_COMPA interrupt
+  // set PB1 as output
   constexpr uint8_t CS1_VALUE = ((((SERVOCTRL_ISR_PRESCALER == 256) || (SERVOCTRL_ISR_PRESCALER == 1024)) ? 1 : 0) << CS12) |
                                 ((((SERVOCTRL_ISR_PRESCALER == 8) || (SERVOCTRL_ISR_PRESCALER == 64)) ? 1 : 0) << CS11) |
                                 ((((SERVOCTRL_ISR_PRESCALER == 1) || (SERVOCTRL_ISR_PRESCALER == 64) || (SERVOCTRL_ISR_PRESCALER == 1024)) ? 1 : 0) << CS10);
   constexpr uint8_t TCCR1B_INIT = (1 << WGM13) | (1 << WGM12) | CS1_VALUE;
   constexpr uint8_t TCCR1A_INIT = (1 << WGM11) | (1 << COM1A1) | (SERVOCTRL_INVERTSIGNAL << COM1A0);
   constexpr uint8_t TIMSK1_INIT = (1 << OCIE1A);
-  constexpr uint8_t PB1_MASK = (1 << PB1);
-  constexpr uint8_t DDB1_MASK = (1 << DDB1);
 
   TCCR1B = TCCR1B_INIT;
   TCCR1A = TCCR1A_INIT;
-  DDRB |= DDB1_MASK;
+  DDRB |= SERVOCTRL_PINB_DIR_MASK;
 
-  servoctrl_pwm = SERVOCTRL_ISR_TICKS_UP;
-  OCR1A = static_cast<uint16_t>(servoctrl_pwm);
-  ICR1 = static_cast<uint16_t>(SERVOCTRL_ISR_TICKS_PERIOD);
+  servoctrl_pulsewidth = SERVOCTRL_ISR_TICKS_UP;
+  OCR1A = static_cast<uint16_t>(servoctrl_pulsewidth);
   ICR1 = static_cast<uint16_t>(SERVOCTRL_ISR_TICKS_PERIOD);
   servoctrl_state = SERVOCTRL_UP;
-  TIMSK1 |= TIMSK1_INIT;
+  TIMSK1 = TIMSK1_INIT;
+}
+
+/// @brief deactivate servo control
+void ServoCtrl::deactivate()
+{
+  TIMSK1 = 0U;
+  DDRB &= ~SERVOCTRL_PINB_DIR_MASK;
+  servoctrl_state = SERVOCTRL_OFF;
 }
 
 /// @brief start the pen lowering process
