@@ -1,0 +1,13 @@
+.vscode/
+*.log
+*.tmp
+*.bak
+*.swp
+*.DS_Store
+*.class
+*.jar 
+*.pdf
+*.hex
+*.map
+*.vcd
+*.elf
